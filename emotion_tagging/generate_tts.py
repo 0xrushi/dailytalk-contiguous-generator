@@ -119,40 +119,65 @@ def generate_fish_tts(text, tag, token, temperature=0.7, top_p=0.7):
         return np.zeros(samples, dtype=np.float32)
 
 
-def process_and_reconstruct(transcript_jsonl, output_dir, token, output_transcript, temperature=0.7, top_p=0.7):
+def process_and_reconstruct(transcript_jsonl, output_dir, token, output_transcript, temperature=0.7, top_p=0.7, resume=False):
     """
     Reconstruct conversation with TTS and dynamic timing.
     """
     transcript_path = Path(transcript_jsonl)
     output_path = Path(output_dir)
-    
+
     # Load VAD
     print("Loading VAD model...")
     vad_model, get_speech_timestamps = load_silero_vad()
-    
+
     # Read transcript
     entries = []
     with open(transcript_path, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 entries.append(json.loads(line.strip()))
-    
+
     print(f"Loaded {len(entries)} transcript entries")
-    
+
     entries_by_file = {}
     for entry in entries:
         af = entry["audio_file"]
         if af not in entries_by_file:
             entries_by_file[af] = []
         entries_by_file[af].append(entry)
+
+    # Resume logic: skip already processed files
+    if resume:
+        # Get all unique files in order
+        unique_files = list(entries_by_file.keys())
+
+        # Find which files already have _edited.wav versions
+        files_to_process = []
+        skipped_count = 0
+        for audio_file in unique_files:
+            original_wav_path = output_path / audio_file
+            edited_wav_path = output_path / f"{original_wav_path.stem}_edited{original_wav_path.suffix}"
+            if edited_wav_path.exists():
+                skipped_count += 1
+                print(f"  Skipping completed file: {audio_file}")
+            else:
+                files_to_process.append(audio_file)
+
+        print(f"  Resume mode: skipping {skipped_count} already processed files")
+        print(f"  Will process {len(files_to_process)} remaining files")
+    else:
+        files_to_process = list(entries_by_file.keys())
+
+        # Clear output transcript only if not resuming
+        if output_transcript:
+            with open(output_transcript, "w", encoding="utf-8") as f:
+                pass
     
-    # Clear output transcript if it exists
-    if output_transcript:
-        with open(output_transcript, "w", encoding="utf-8") as f:
-            pass
-    
-    for audio_file, left_entries in entries_by_file.items():
+    for audio_file in files_to_process:
+        left_entries = entries_by_file[audio_file]
+
         print(f"\nProcessing: {audio_file}")
+
         original_wav_path = output_path / audio_file
         
         if not original_wav_path.exists():
@@ -337,16 +362,18 @@ def main():
     parser.add_argument("--output-transcript", default="transcript_shifted.jsonl")
     parser.add_argument("--temperature", type=float, default=0.7, help="Temperature for TTS (default: 0.7)")
     parser.add_argument("--top_p", type=float, default=0.7, help="Top P for TTS (default: 0.7)")
-    
+    parser.add_argument("--resume", action="store_true", help="Resume from last entry in output-transcript")
+
     args = parser.parse_args()
-    
+
     process_and_reconstruct(
         args.transcript,
         args.output_dir,
         args.token,
         args.output_transcript,
         args.temperature,
-        args.top_p
+        args.top_p,
+        args.resume
     )
 
 if __name__ == "__main__":
