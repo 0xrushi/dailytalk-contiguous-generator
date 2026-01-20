@@ -58,7 +58,7 @@ def generate_fish_tts(text, tag, token, temperature=0.7, top_p=0.7):
             "text": text,
             "language": "en",
             "sample_rate": 32000,
-            "reference_id": "<add referennce id here>",
+            "reference_id": os.getenv("FISH_AUDIO_REFERENCE_ID"),
             "temperature": temperature,
             "top_p": top_p
         }
@@ -122,9 +122,22 @@ def generate_fish_tts(text, tag, token, temperature=0.7, top_p=0.7):
 def process_and_reconstruct(transcript_jsonl, output_dir, token, output_transcript, temperature=0.7, top_p=0.7, resume=False):
     """
     Reconstruct conversation with TTS and dynamic timing.
+    
+    NOTE: This function now REPLACES entries in output_transcript instead of appending.
+    When an audio file is re-processed, its corresponding entries are updated in-place.
     """
     transcript_path = Path(transcript_jsonl)
     output_path = Path(output_dir)
+    
+    # Load existing transcript entries for deduplication
+    existing_transcript_entries = {}
+    if Path(output_transcript).exists():
+        with open(output_transcript, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    entry = json.loads(line.strip())
+                    key = f"{entry.get('audio_file')}_{entry.get('tagged_text', '')}_{entry.get('start', 0)}"
+                    existing_transcript_entries[key] = entry
 
     # Load VAD
     print("Loading VAD model...")
@@ -347,11 +360,18 @@ def process_and_reconstruct(transcript_jsonl, output_dir, token, output_transcri
             print(f"  Saving reconstructed: {out_filename}")
             torchaudio.save(str(out_path), final_tensor, sr)
             
-            # Save transcript entries for this file immediately
+            # Update transcript entries in memory
             if output_transcript and file_new_transcript_entries:
-                with open(output_transcript, "a", encoding="utf-8") as f:
-                    for entry in file_new_transcript_entries:
-                        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                for entry in file_new_transcript_entries:
+                    key = f"{entry.get('audio_file')}_{entry.get('tagged_text', '')}_{entry.get('start', 0)}"
+                    existing_transcript_entries[key] = entry
+    
+    # Write all updated transcript entries to file
+    if output_transcript and existing_transcript_entries:
+        print(f"\nWriting {len(existing_transcript_entries)} transcript entries to {output_transcript}")
+        with open(output_transcript, "w", encoding="utf-8") as f:
+            for entry in existing_transcript_entries.values():
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def main():
